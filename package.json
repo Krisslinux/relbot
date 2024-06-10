@@ -17,6 +17,6 @@
     "telegraf": "^4.12.2"
   },
   "engines": {
-    "node": "18.x" // Or your desired Node.js version
+    "node": "18.x" 
   }
 }
