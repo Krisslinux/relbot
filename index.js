@@ -17,29 +17,56 @@ try {
     process.exit(1); 
 }
 
+// Create Telegram bot instance
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 // Webhook Setup (for Heroku)
 app.use(bot.webhookCallback(`/${bot.secretPathComponent()}`));
-app.listen(process.env.PORT || 3000, () => {
+app.listen(process.env.PORT || 3000, async () => {
     console.log(`Server running on port ${process.env.PORT || 3000}`);
     //Set Webhook on Start. Only when running on Heroku.
     if(process.env.NODE_ENV === "production") {
-        bot.telegram.setWebhook(process.env.YOUR_HEROKU_APP_URL + `/${bot.secretPathComponent()}`);
-        console.log(`Webhook set to: ${process.env.YOUR_HEROKU_APP_URL + `/${bot.secretPathComponent()}`}`);
+        // Exponential backoff for webhook setup
+        let retryDelay = 1000; // Initial retry delay in milliseconds
+        const maxRetryDelay = 60000; // Maximum retry delay
+
+        while (true) {
+          try {
+            await bot.telegram.setWebhook(process.env.YOUR_HEROKU_APP_URL + `/${bot.secretPathComponent()}`);
+            console.log(`Webhook set to: ${process.env.YOUR_HEROKU_APP_URL + `/${bot.secretPathComponent()}`}`);
+            break; // Exit the loop on success
+          } catch (error) {
+            if (error.response && error.response.status === 429) {
+              console.warn("Rate limited: Retrying webhook setup after", retryDelay, "ms");
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              retryDelay = Math.min(retryDelay * 2, maxRetryDelay); // Double the delay, up to the max
+            } else {
+              console.error("Error setting webhook:", error);
+              // Handle other errors if needed
+              break;
+            }
+          }
+        }
     }
 });
 
-const ig = new IgApiClient(); // Create your IgApiClient instance here
 
-// Login to Instagram
+// Initialize Instagram API Client
+const ig = new IgApiClient();
+
+// Instagram Login (async IIFE)
 (async () => {
     ig.state.generateDevice(process.env.INSTAGRAM_USERNAME);
     await ig.simulate.preLoginFlow();
-    await ig.account.login(process.env.INSTAGRAM_USERNAME, process.env.INSTAGRAM_PASSWORD);
+    try {
+        await ig.account.login(process.env.INSTAGRAM_USERNAME, process.env.INSTAGRAM_PASSWORD);
+    } catch (err) {
+        console.error("Error logging into Instagram:", err);
+        process.exit(1); 
+    }
 })();
 
-
+// Telegram Bot Commands
 bot.start((ctx) => ctx.reply('Send me an Instagram Reels link!'));
 
 bot.on('text', async (ctx) => {
@@ -72,12 +99,11 @@ bot.on('text', async (ctx) => {
                     video: './output.mp4',
                     caption: caption
                 });
-            
+
                 ctx.replyWithHTML(`Reels reposted successfully!  \n\n<b><a href="${publishResult.media.product_type === "feed" ? "https://www.instagram.com/p/" + publishResult.media.code : latestMedia[0].image_versions2.candidates[0].url}">View it on your Instagram profile</a></b>`);
                 fs.unlinkSync(tempFilePath); // Delete the temporary file
                 fs.unlinkSync("output.mp4");
             })();
-
         });
 
     } catch (error) {
@@ -88,6 +114,3 @@ bot.on('text', async (ctx) => {
         }
     }
 });
-
-
-bot.launch(); 
