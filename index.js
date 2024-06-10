@@ -23,17 +23,63 @@ app.listen(process.env.PORT || 3000, () => {
     console.log(`Server running on port ${process.env.PORT || 3000}`);
     //Set Webhook on Start. Only when running on Heroku.
     if(process.env.NODE_ENV === "production") {
-        // Ensure a trailing slash for the webhook URL
-        const webhookUrl = process.env.YOUR_HEROKU_APP_URL.endsWith('/')
-            ? process.env.YOUR_HEROKU_APP_URL + bot.secretPathComponent()
-            : process.env.YOUR_HEROKU_APP_URL + '/' + bot.secretPathComponent();
+        bot.telegram.setWebhook(process.env.YOUR_HEROKU_APP_URL + `/${bot.secretPathComponent()}`);
+        console.log(`Webhook set to: ${process.env.YOUR_HEROKU_APP_URL + `/${bot.secretPathComponent()}`}`);
+    }
+});
+bot.start((ctx) => ctx.reply('Send me an Instagram Reels link!'));
 
-        bot.telegram.setWebhook(webhookUrl);
-        console.log(`Webhook set to: ${webhookUrl}`);
+bot.on('text', async (ctx) => {
+    const reelsUrl = ctx.message.text;
+    const tempFilePath = path.join(__dirname, 'temp_reels.mp4'); 
+    const caption = "Reposted from Telegram bot"; 
+
+    try {
+        const directUrl = await instagramGetUrl(reelsUrl); 
+        
+        // Download the Reels media
+        const response = await axios({
+            method: 'get',
+            url: directUrl,
+            responseType: 'stream'
+        });
+        response.data.pipe(fs.createWriteStream(tempFilePath));
+
+        // Repost to Instagram 
+        exec(`ffmpeg -i ${tempFilePath} -vf "pad=ih*16/9:ih:(ow-iw)/2:(oh-ih)/2,scale='min(1080,iw)':min'(1920,ih)':force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"  output.mp4`, (error, stdout, stderr) => {
+            if (error) {
+                console.error(`Error formatting video: ${error.message}`);
+                ctx.reply("Error formatting the video.");
+                return;
+            }
+            console.log('Video formatted successfully!');
+            exec(`instabot-py --login ${process.env.INSTAGRAM_USERNAME} --password ${process.env.INSTAGRAM_PASSWORD} post_video --video output.mp4 --caption "${caption}"`, async (error, stdout, stderr) => {
+                if (error) {
+                    if (stderr.includes("Wrong login or password")) {
+                        ctx.reply("Error logging into Instagram. Please check your credentials.");
+                    } else {
+                        console.error(`Error posting to Instagram: ${error.message}`);
+                        ctx.reply("Error posting to Instagram.");
+                    }
+                    return;
+                }
+                const latestMedia = await ig.feed.user(ig.state.cookieUserId).items(); 
+                const mediaUrl = latestMedia[0].image_versions2.candidates[0].url;
+
+                ctx.replyWithHTML(`Reels reposted successfully!  \n\n<b><a href="${mediaUrl}">View it on your Instagram profile</a></b>`);
+                fs.unlinkSync(tempFilePath); // Delete the temporary file
+                fs.unlinkSync("output.mp4");
+            });
+        });
+
+    } catch (error) {
+        console.error('Error reposting Reels:', error);
+        ctx.reply('Sorry, there was an error reposting the Reels.');
+        if (fs.existsSync(tempFilePath)) {
+            fs.unlinkSync(tempFilePath); 
+        }
     }
 });
 
 
-bot.start((ctx) => ctx.reply('Send me an Instagram Reels link!'));
-
-// ... (Rest of your bot.on 'text' handler and other logic) ...
+bot.launch(); 
