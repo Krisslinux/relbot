@@ -6,6 +6,8 @@ const path = require('path');
 const { exec } = require('child_process');
 const express = require('express');
 const app = express(); // Initialize Express
+const { IgApiClient } = require('instagram-private-api');
+
 
 // Load environment variables with error handling
 try {
@@ -27,6 +29,17 @@ app.listen(process.env.PORT || 3000, () => {
         console.log(`Webhook set to: ${process.env.YOUR_HEROKU_APP_URL + `/${bot.secretPathComponent()}`}`);
     }
 });
+
+const ig = new IgApiClient(); // Create your IgApiClient instance here
+
+// Login to Instagram
+(async () => {
+    ig.state.generateDevice(process.env.INSTAGRAM_USERNAME);
+    await ig.simulate.preLoginFlow();
+    await ig.account.login(process.env.INSTAGRAM_USERNAME, process.env.INSTAGRAM_PASSWORD);
+})();
+
+
 bot.start((ctx) => ctx.reply('Send me an Instagram Reels link!'));
 
 bot.on('text', async (ctx) => {
@@ -53,23 +66,18 @@ bot.on('text', async (ctx) => {
                 return;
             }
             console.log('Video formatted successfully!');
-            exec(`instabot-py --login ${process.env.INSTAGRAM_USERNAME} --password ${process.env.INSTAGRAM_PASSWORD} post_video --video output.mp4 --caption "${caption}"`, async (error, stdout, stderr) => {
-                if (error) {
-                    if (stderr.includes("Wrong login or password")) {
-                        ctx.reply("Error logging into Instagram. Please check your credentials.");
-                    } else {
-                        console.error(`Error posting to Instagram: ${error.message}`);
-                        ctx.reply("Error posting to Instagram.");
-                    }
-                    return;
-                }
-                const latestMedia = await ig.feed.user(ig.state.cookieUserId).items(); 
-                const mediaUrl = latestMedia[0].image_versions2.candidates[0].url;
-
-                ctx.replyWithHTML(`Reels reposted successfully!  \n\n<b><a href="${mediaUrl}">View it on your Instagram profile</a></b>`);
+            (async () => {
+                const publishResult = await ig.publish.video({
+                    //video: tempFilePath, // Path to your video file
+                    video: './output.mp4',
+                    caption: caption
+                });
+            
+                ctx.replyWithHTML(`Reels reposted successfully!  \n\n<b><a href="${publishResult.media.product_type === "feed" ? "https://www.instagram.com/p/" + publishResult.media.code : latestMedia[0].image_versions2.candidates[0].url}">View it on your Instagram profile</a></b>`);
                 fs.unlinkSync(tempFilePath); // Delete the temporary file
                 fs.unlinkSync("output.mp4");
-            });
+            })();
+
         });
 
     } catch (error) {
